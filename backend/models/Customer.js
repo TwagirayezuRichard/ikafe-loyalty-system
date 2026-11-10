@@ -9,7 +9,11 @@ const customerSchema = new mongoose.Schema({
 
   email: String,
 
-  points: { type: Number, default: 0 },
+  dateOfBirth: String,
+
+  currentLevel: { type: Number, default: 1 },
+
+  walletBalance: { type: Number, default: 0 },
 
   totalSpent: { type: Number, default: 0 },
 

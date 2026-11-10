@@ -6,9 +6,10 @@ const {
   getCustomer,
   getAllCustomers
 } = require("../controllers/customerController");
+const { authenticate, authorizeRoles } = require("../middleware/authMiddleware");
 
 router.post("/register", registerCustomer);
+router.get("/", authenticate, authorizeRoles("staff", "admin"), getAllCustomers);
 router.get("/:id", getCustomer);
-router.get("/", getAllCustomers);
 
 module.exports = router;

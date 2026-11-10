@@ -85,4 +85,55 @@ const loginUser = async (req, res) => {
   }
 };
 
-module.exports = { createUser, getUsers, loginUser };
+const updateUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role, username, password, email } = req.body;
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (username && username !== user.username) {
+      const existing = await User.findOne({ username });
+      if (existing) {
+        return res.status(409).json({ message: "Username already exists" });
+      }
+      user.username = username;
+    }
+
+    if (role) user.role = role;
+    if (email !== undefined) user.email = email;
+    if (password) {
+      user.password = await bcrypt.hash(password, 10);
+    }
+
+    await user.save();
+
+    res.json({ username: user.username, role: user.role, email: user.email, message: "User updated" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error updating user" });
+  }
+};
+
+const deleteUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await User.findByIdAndDelete(id);
+
+    res.json({ message: "User deleted successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error deleting user" });
+  }
+};
+
+module.exports = { createUser, getUsers, loginUser, updateUser, deleteUser };

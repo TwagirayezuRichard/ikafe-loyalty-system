@@ -3,7 +3,7 @@ const QRCode = require("qrcode");
 
 exports.registerCustomer = async (req, res) => {
   try {
-    const { name, phone, email } = req.body;
+    const { name, phone, email, dateOfBirth } = req.body;
 
     const existing = await Customer.findOne({ phone });
     if (existing) {
@@ -20,7 +20,8 @@ exports.registerCustomer = async (req, res) => {
       customerId,
       name,
       phone,
-      email
+      email,
+      dateOfBirth
     });
 
     res.json({

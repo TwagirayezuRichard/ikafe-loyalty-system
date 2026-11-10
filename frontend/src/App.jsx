@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 
-const API_BASE = '/api';
+const API_BASE = import.meta.env.VITE_API_BASE || 'https://ikafe-loyality-backend.onrender.com/api';
+
+const LEVEL_DETAILS = {
+  1: { label: 'Level 1', cashbackRate: 1, range: 'Visits 1-5' },
+  2: { label: 'Level 2', cashbackRate: 2, range: 'Visits 6-15' },
+  3: { label: 'Level 3', cashbackRate: 3, range: 'Visits 16-25' },
+  4: { label: 'Level 4', cashbackRate: 4, range: 'Visits 26-35' },
+  5: { label: 'Level 5', cashbackRate: 5, range: 'Visits 36+' }
+};
+
+function formatRwf(value) {
+  return `${Number(value || 0).toLocaleString('en-US')} RWF`;
+}
 
 function App() {
   const [appMode, setAppMode] = useState('landing');
   const [customers, setCustomers] = useState([]);
-  const [rewards, setRewards] = useState([]);
   const [customer, setCustomer] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [qrCode, setQrCode] = useState('');
@@ -13,18 +24,22 @@ function App() {
   const [customerIdInput, setCustomerIdInput] = useState('');
   const [staffLookupInput, setStaffLookupInput] = useState('');
 
-  const [joinForm, setJoinForm] = useState({ name: '', phone: '', email: '' });
-  const [pointsForm, setPointsForm] = useState({ customerId: '', amount: '' });
-  const [redeemForm, setRedeemForm] = useState({ customerId: '', pointsRequired: '' });
-  const [rewardForm, setRewardForm] = useState({ name: '', description: '', pointsRequired: '' });
+  const [joinForm, setJoinForm] = useState({ name: '', phone: '', email: '', dateOfBirth: '' });
+  const [purchaseForm, setPurchaseForm] = useState({ customerId: '', amount: '', useWallet: true });
   const [userForm, setUserForm] = useState({ role: 'staff', username: '', password: '', email: '' });
+  const [editUserForm, setEditUserForm] = useState({ id: '', role: '', username: '', password: '', email: '' });
+  const [editingUser, setEditingUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [loginMode, setLoginMode] = useState(null);
+  const [showLoginPanel, setShowLoginPanel] = useState(false);
   const [staffLogin, setStaffLogin] = useState({ username: '', password: '' });
   const [adminLogin, setAdminLogin] = useState({ username: '', password: '' });
   const [authToken, setAuthToken] = useState('');
   const [authUser, setAuthUser] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [isAppInstalled, setIsAppInstalled] = useState(false);
+  const [showInstallInstructions, setShowInstallInstructions] = useState(false);
 
   const loadCustomers = async () => {
     try {
@@ -36,16 +51,6 @@ function App() {
     } catch (error) {
       console.error(error);
       setCustomers([]);
-    }
-  };
-
-  const loadRewards = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/rewards`);
-      const data = await res.json();
-      setRewards(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error(error);
     }
   };
 
@@ -87,7 +92,6 @@ function App() {
   };
 
   useEffect(() => {
-    loadRewards();
     if (authToken) {
       loadCustomers();
       loadUsers();
@@ -95,7 +99,7 @@ function App() {
   }, [authToken]);
 
   useEffect(() => {
-    const saved = localStorage.getItem("ikafeAuth");
+    const saved = localStorage.getItem('ikafeAuth');
     if (saved) {
       try {
         const { token, user } = JSON.parse(saved);
@@ -104,21 +108,51 @@ function App() {
           setAuthUser(user);
         }
       } catch (error) {
-        console.error("Failed to restore auth", error);
+        console.error('Failed to restore auth', error);
       }
     }
   }, []);
 
+  useEffect(() => {
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+    setIsAppInstalled(isStandalone);
+
+    const handleInstallAvailable = (event) => {
+      event.preventDefault();
+      setInstallPrompt(event);
+    };
+    const handleInstalled = () => {
+      setIsAppInstalled(true);
+      setInstallPrompt(null);
+      setShowInstallInstructions(false);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleInstallAvailable);
+    window.addEventListener('appinstalled', handleInstalled);
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch((error) => {
+        console.error('Failed to register the app service worker', error);
+      });
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleInstallAvailable);
+      window.removeEventListener('appinstalled', handleInstalled);
+    };
+  }, []);
+
   const stats = useMemo(() => {
-    const totalPoints = customers.reduce((sum, item) => sum + Number(item.points || 0), 0);
+    const totalWalletBalance = customers.reduce((sum, item) => sum + Number(item.walletBalance || 0), 0);
     const totalSpent = customers.reduce((sum, item) => sum + Number(item.totalSpent || 0), 0);
     const totalVisits = customers.reduce((sum, item) => sum + Number(item.visits || 0), 0);
-    return { totalPoints, totalSpent, totalVisits };
+    return { totalWalletBalance, totalSpent, totalVisits };
   }, [customers]);
 
   const topCustomers = useMemo(() => {
     return [...customers]
-      .sort((a, b) => Number(b.points || 0) - Number(a.points || 0))
+      .sort((a, b) => Number(b.walletBalance || 0) - Number(a.walletBalance || 0))
       .slice(0, 5);
   }, [customers]);
 
@@ -127,21 +161,9 @@ function App() {
   const syncCustomerState = async (customerData, generatedQrCode = '') => {
     setCustomer(customerData);
     setQrCode(generatedQrCode);
-    setPointsForm((prev) => ({ ...prev, customerId: customerData.customerId }));
-    setRedeemForm((prev) => ({ ...prev, customerId: customerData.customerId }));
+    setPurchaseForm((prev) => ({ ...prev, customerId: customerData.customerId }));
     await loadTransactions(customerData.customerId);
   };
-
-  const customerRewardMessage = useMemo(() => {
-    if (!customer || !rewards.length) return '';
-    const eligibleReward = [...rewards]
-      .filter((reward) => customer.points >= reward.pointsRequired)
-      .sort((a, b) => b.pointsRequired - a.pointsRequired)[0];
-
-    return eligibleReward
-      ? `Congratulations ${customer.name}! You now have ${customer.points} points and can take the reward: ${eligibleReward.name}. Please claim it now.`
-      : '';
-  }, [customer, rewards]);
 
   const handleReturnHome = () => {
     setAppMode('landing');
@@ -150,9 +172,8 @@ function App() {
     setTransactions([]);
     setCustomerIdInput('');
     setStaffLookupInput('');
-    setPointsForm({ customerId: '', amount: '' });
-    setRedeemForm({ customerId: '', pointsRequired: '' });
-    setJoinForm({ name: '', phone: '', email: '' });
+    setPurchaseForm({ customerId: '', amount: '' });
+    setJoinForm({ name: '', phone: '', email: '', dateOfBirth: '' });
     setAuthToken('');
     setAuthUser(null);
     localStorage.removeItem('ikafeAuth');
@@ -161,12 +182,59 @@ function App() {
 
   const goToStaff = () => {
     setLoginMode('staff');
+    setShowLoginPanel(true);
     setMessage({ type: '', text: '' });
   };
 
   const goToAdmin = () => {
     setLoginMode('admin');
+    setShowLoginPanel(true);
     setMessage({ type: '', text: '' });
+  };
+
+  const openLoginPanel = () => {
+    setShowLoginPanel(true);
+    setLoginMode(null);
+    setMessage({ type: '', text: '' });
+  };
+
+  const handleScrollToJoin = () => {
+    const joinForm = document.getElementById('join-form');
+    if (joinForm) {
+      const formRect = joinForm.getBoundingClientRect();
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const offset = 100; // Extra padding from top
+      
+      window.scrollTo({
+        top: formRect.top + scrollTop - offset,
+        behavior: 'smooth'
+      });
+      
+      // Focus on the first input after scroll completes
+      setTimeout(() => {
+        const firstInput = joinForm.querySelector('input');
+        if (firstInput) {
+          firstInput.focus();
+        }
+      }, 800);
+    }
+  };
+
+  const handleInstallApp = async () => {
+    if (!installPrompt) {
+      setShowInstallInstructions((show) => !show);
+      return;
+    }
+
+    try {
+      await installPrompt.prompt();
+      await installPrompt.userChoice;
+    } catch (error) {
+      console.error('Failed to open the app installation prompt', error);
+      showMessage('error', 'Unable to open the install prompt. Please use your browser menu to add Ikafé to your home screen.');
+    } finally {
+      setInstallPrompt(null);
+    }
   };
 
   const handleStaffLogin = async (event) => {
@@ -240,7 +308,7 @@ function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Membership join failed');
       await syncCustomerState(data.customer, data.qrCode || '');
-      setJoinForm({ name: '', phone: '', email: '' });
+      setJoinForm({ name: '', phone: '', email: '', dateOfBirth: '' });
       showMessage('success', `Welcome ${data.customer.name}! Your loyalty card is ready.`);
       loadCustomers();
       setAppMode('customer');
@@ -253,7 +321,15 @@ function App() {
     event.preventDefault();
     try {
       const res = await fetch(`${API_BASE}/customers/${customerIdInput}`);
-      const data = await res.json();
+      const text = await res.text();
+      let data = null;
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (parseError) {
+          throw new Error('Customer profile endpoint returned a non-JSON response. Check the backend URL or customer route.');
+        }
+      }
       if (!res.ok || !data) throw new Error('Customer not found');
       await syncCustomerState(data);
       showMessage('success', `Loaded ${data.name}`);
@@ -267,101 +343,62 @@ function App() {
     event.preventDefault();
     try {
       const res = await fetch(`${API_BASE}/customers/${staffLookupInput}`);
-      const data = await res.json();
+      const text = await res.text();
+      let data = null;
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (parseError) {
+          throw new Error('Customer profile endpoint returned a non-JSON response. Check the backend URL or customer route.');
+        }
+      }
       if (!res.ok || !data) throw new Error('Customer not found');
       await syncCustomerState(data);
-      setPointsForm((prev) => ({ ...prev, customerId: data.customerId }));
-      setRedeemForm((prev) => ({ ...prev, customerId: data.customerId }));
-      showMessage('success', `Customer loaded for checkout`);
+      setPurchaseForm((prev) => ({ ...prev, customerId: data.customerId }));
+      showMessage('success', 'Customer loaded for checkout');
     } catch (error) {
       showMessage('error', error.message);
     }
   };
 
-  const handleAddPoints = async (event) => {
+  const handlePurchase = async (event) => {
     event.preventDefault();
     if (!authToken) {
       return showMessage('error', 'Staff or admin login required');
     }
 
     try {
-      const res = await fetch(`${API_BASE}/loyalty/add-points`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({ customerId: pointsForm.customerId, amount: Number(pointsForm.amount) })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Unable to add points');
-      setPointsForm((prev) => ({ ...prev, amount: '' }));
-      showMessage('success', data.message || 'Points added');
-      loadCustomers();
-      if (pointsForm.customerId) {
-        const customerRes = await fetch(`${API_BASE}/customers/${pointsForm.customerId}`);
-        const customerData = await customerRes.json();
-        await syncCustomerState(customerData);
-      }
-    } catch (error) {
-      showMessage('error', error.message);
-    }
-  };
-
-  const handleRedeem = async (event) => {
-    event.preventDefault();
-    if (!authToken) {
-      return showMessage('error', 'Staff or admin login required');
-    }
-
-    try {
-      const res = await fetch(`${API_BASE}/loyalty/redeem`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({ customerId: redeemForm.customerId, pointsRequired: Number(redeemForm.pointsRequired) })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Unable to redeem');
-      setRedeemForm((prev) => ({ ...prev, pointsRequired: '' }));
-      showMessage('success', data.message || 'Reward redeemed');
-      loadCustomers();
-      if (redeemForm.customerId) {
-        const customerRes = await fetch(`${API_BASE}/customers/${redeemForm.customerId}`);
-        const customerData = await customerRes.json();
-        await syncCustomerState(customerData);
-      }
-    } catch (error) {
-      showMessage('error', error.message);
-    }
-  };
-
-  const handleCreateReward = async (event) => {
-    event.preventDefault();
-    if (!authToken) {
-      return showMessage('error', 'Admin login required');
-    }
-
-    try {
-      const res = await fetch(`${API_BASE}/rewards`, {
+      const res = await fetch(`${API_BASE}/loyalty/process-purchase`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          name: rewardForm.name,
-          description: rewardForm.description,
-          pointsRequired: Number(rewardForm.pointsRequired)
+          customerId: purchaseForm.customerId,
+          amount: Number(purchaseForm.amount),
+          useWallet: purchaseForm.useWallet
         })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Reward could not be created');
-      setRewardForm({ name: '', description: '', pointsRequired: '' });
-      showMessage('success', 'Reward created');
-      loadRewards();
+
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        console.error('Response is not JSON:', text);
+        throw new Error('Server returned invalid response. Please try again.');
+      }
+
+      if (!res.ok) throw new Error(data.message || 'Unable to process purchase');
+      setPurchaseForm((prev) => ({ ...prev, amount: '', useWallet: true }));
+      showMessage('success', `Purchase processed. Cashback earned: ${formatRwf(data.cashbackEarned)}. Wallet used: ${formatRwf(data.walletUsed)}.`);
+      loadCustomers();
+      if (purchaseForm.customerId) {
+        const customerRes = await fetch(`${API_BASE}/customers/${purchaseForm.customerId}`);
+        const customerData = await customerRes.json();
+        await syncCustomerState(customerData);
+      }
     } catch (error) {
       showMessage('error', error.message);
     }
@@ -397,13 +434,80 @@ function App() {
     }
   };
 
+  const handleEditUser = (user) => {
+    setEditUserForm({
+      id: user._id,
+      role: user.role,
+      username: user.username,
+      password: '',
+      email: user.email || ''
+    });
+    setEditingUser(user);
+  };
+
+  const handleUpdateUser = async (event) => {
+    event.preventDefault();
+    if (!authToken) {
+      return showMessage('error', 'Admin login required to update users');
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/users/${editUserForm.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          role: editUserForm.role,
+          username: editUserForm.username,
+          password: editUserForm.password || undefined,
+          email: editUserForm.email
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'User could not be updated');
+      setEditUserForm({ id: '', role: '', username: '', password: '', email: '' });
+      setEditingUser(null);
+      showMessage('success', `${data.username || 'User'} updated successfully`);
+      loadUsers();
+    } catch (error) {
+      showMessage('error', error.message);
+    }
+  };
+
+  const handleDeleteUser = async (userId) => {
+    if (!authToken) {
+      return showMessage('error', 'Admin login required to delete users');
+    }
+
+    if (!confirm('Are you sure you want to delete this user?')) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/users/${userId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${authToken}`
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'User could not be deleted');
+      showMessage('success', 'User deleted successfully');
+      loadUsers();
+    } catch (error) {
+      showMessage('error', error.message);
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div>
             <h1>Ikafé Loyalty</h1>
-            <p>Scan, join, and view your customer dashboard.</p>
+            <p>Visit-based cashback and wallet redemption.</p>
           </div>
           <button className="mobile-menu-toggle" onClick={() => setSidebarOpen((open) => !open)}>
             {sidebarOpen ? 'Close' : 'Menu'}
@@ -422,9 +526,22 @@ function App() {
 
         <div className="card compact">
           <h3>Live stats</h3>
-          <p>{customers.length} customers</p>
-          <p>{stats.totalPoints} loyalty points</p>
-          <p>{rewards.length} active rewards</p>
+          {(authUser?.role === 'admin' || authUser?.role === 'staff') ? (
+            <>
+              <p>{customers.length} customers</p>
+              <p>{formatRwf(stats.totalWalletBalance)} wallet balance</p>
+              <p>{formatRwf(stats.totalSpent)} total spend</p>
+            </>
+          ) : customer ? (
+            <>
+              <p>{customer.customerId}</p>
+              <p>{customer.visits} visits</p>
+              <p>{formatRwf(customer.walletBalance)} wallet balance</p>
+              <p>{formatRwf(customer.totalSpent)} total spend</p>
+            </>
+          ) : (
+            <p>Sign in to view live numbers</p>
+          )}
         </div>
       </aside>
 
@@ -436,66 +553,116 @@ function App() {
         {appMode === 'landing' && (
           <section className="view-grid home-hero">
             <div className="card hero-card wide">
-              <div className="hero-copy">
-                <p className="eyebrow">Join the Ikafehaven community</p>
-                <h2>Earn loyalty rewards, scan your QR, and get gifted.</h2>
-                <p>Join the large community of Ikafehaven and collect rewards with every visit. Existing members use their ID to access their dashboard, while staff and admin log in securely from the home page.</p>
-                <div className="hero-actions">
-                  <button className="cta-primary" onClick={() => setAppMode('customer')}>Customer portal</button>
-                  <button className="cta-secondary" onClick={goToStaff}>Staff login</button>
-                  <button className="cta-secondary" onClick={goToAdmin}>Admin login</button>
+              <div className="hero-topbar">
+                <div className="hero-topbar-left">
+                  <p className="eyebrow">☕ Ikafé Loyalty Program</p>
+                </div>
+                <div className="hero-topbar-right">
+                  <button className="cta-secondary" onClick={handleScrollToJoin}>Get Started</button>
+                  <button className="hero-login-link ghost-button" onClick={openLoginPanel}>Team Access</button>
                 </div>
               </div>
+
+              <div className="hero-card-top">
+                <div className="hero-copy">
+                  <p className="eyebrow">Rewards That Grow With You</p>
+                  <h2>Earn Cashback on Every Visit • Unlock Exclusive Perks • Redeem Your Wallet</h2>
+                  <p>Join our loyalty program and earn up to 5% cashback on every purchase. Watch your rewards grow as you climb through 5 exclusive levels, from your first visit to VIP status.</p>
+                  <div className="hero-actions">
+                    <button className="cta-primary" onClick={handleScrollToJoin}>Start Earning Today</button>
+                    <button className="cta-secondary" onClick={openLoginPanel}>Staff Dashboard</button>
+                    {!isAppInstalled ? (
+                      <button className="cta-secondary" onClick={handleInstallApp}>Install Mobile App</button>
+                    ) : null}
+                  </div>
+                  {showInstallInstructions ? (
+                    <div className="install-instructions" role="status">
+                      <strong>Add Ikafé to your home screen</strong>
+                      {/iPad|iPhone|iPod/i.test(navigator.userAgent) ? (
+                        <p>In Safari, tap the Share button, then choose “Add to Home Screen”.</p>
+                      ) : (
+                        <p>Open this page in Chrome, tap the menu (⋮), then choose “Install app” or “Add to Home screen”.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="hero-login-box">
+                  <div className="hero-login-header">
+                    <p className="eyebrow">🔐 Team Portal</p>
+                    <p className="small">Secure access for staff and administrators</p>
+                  </div>
+                  <div className="hero-login-buttons">
+                    <button className="role-button" onClick={goToStaff}>Staff Login</button>
+                    <button className="role-button ghost-button" onClick={goToAdmin}>Admin Login</button>
+                  </div>
+                  {loginMode === 'staff' ? (
+                    <form onSubmit={handleStaffLogin} className="stack login-form">
+                      <input placeholder="Staff username" value={staffLogin.username} onChange={(e) => setStaffLogin({ ...staffLogin, username: e.target.value })} required />
+                      <input type="password" placeholder="Password" value={staffLogin.password} onChange={(e) => setStaffLogin({ ...staffLogin, password: e.target.value })} required />
+                      <button type="submit">Access Staff Dashboard</button>
+                    </form>
+                  ) : null}
+                  {loginMode === 'admin' ? (
+                    <form onSubmit={handleAdminLogin} className="stack login-form">
+                      <input placeholder="Admin username" value={adminLogin.username} onChange={(e) => setAdminLogin({ ...adminLogin, username: e.target.value })} required />
+                      <input type="password" placeholder="Password" value={adminLogin.password} onChange={(e) => setAdminLogin({ ...adminLogin, password: e.target.value })} required />
+                      <button type="submit">Access Admin Dashboard</button>
+                    </form>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="hero-cta-grid">
+                <div className="card hero-signup-card">
+                  <p className="panel-title">🎁 Join the Loyalty Club</p>
+                  <p className="small">Create your account in seconds and start earning cashback on every visit. Your wallet grows with each purchase.</p>
+                  <form id="join-form" onSubmit={handleJoin} className="stack">
+                    <input placeholder="Full name" value={joinForm.name} onChange={(e) => setJoinForm({ ...joinForm, name: e.target.value })} required />
+                    <input placeholder="Phone number" value={joinForm.phone} onChange={(e) => setJoinForm({ ...joinForm, phone: e.target.value })} required />
+                    <input placeholder="Date of birth (MM/DD - optional)" value={joinForm.dateOfBirth} onChange={(e) => setJoinForm({ ...joinForm, dateOfBirth: e.target.value })} />
+                    <input placeholder="Email (optional)" value={joinForm.email} onChange={(e) => setJoinForm({ ...joinForm, email: e.target.value })} />
+                    <button type="submit">Create My Account</button>
+                  </form>
+                </div>
+
+                <div className="card hero-lookup-card">
+                  <h3>👤 Already a Member?</h3>
+                  <p>Enter your customer ID to access your loyalty dashboard, check your wallet balance, and view your rewards progress.</p>
+                  <form onSubmit={handleLookup} className="stack">
+                    <input placeholder="Customer ID (e.g., IKH-000001)" value={customerIdInput} onChange={(e) => setCustomerIdInput(e.target.value)} required />
+                    <button type="submit">Open My Dashboard</button>
+                  </form>
+                </div>
+              </div>
+
               <div className="hero-visual">
                 <div className="hero-panel">
-                  <p className="panel-title">Welcome to Ikafé Loyalty</p>
-                  <p>Scan the code, collect points, and take gifts when you hit your next milestone.</p>
+                  <p className="panel-title">📈 Your Rewards Journey</p>
+                  <div className="level-progress">
+                    <div className="level-step">
+                      <span className="level-badge">Level 1</span>
+                      <span className="level-detail">1-5 visits • 1% cashback</span>
+                    </div>
+                    <div className="level-step">
+                      <span className="level-badge">Level 2</span>
+                      <span className="level-detail">6-15 visits • 2% cashback</span>
+                    </div>
+                    <div className="level-step">
+                      <span className="level-badge">Level 3</span>
+                      <span className="level-detail">16-25 visits • 3% cashback</span>
+                    </div>
+                    <div className="level-step">
+                      <span className="level-badge">Level 4</span>
+                      <span className="level-detail">26-35 visits • 4% cashback</span>
+                    </div>
+                    <div className="level-step">
+                      <span className="level-badge level-vip">Level 5</span>
+                      <span className="level-detail">36+ visits • 5% cashback</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-
-            <div className="card dashboard-card">
-              <h3>Customer portal</h3>
-              <p>Existing members can open their dashboard using their Customer ID. New members can join the program and start earning right away.</p>
-              <form onSubmit={handleLookup} className="stack">
-                <input placeholder="Your Customer ID" value={customerIdInput} onChange={(e) => setCustomerIdInput(e.target.value)} required />
-                <button type="submit">Visit customer dashboard</button>
-              </form>
-              <div className="divider">or</div>
-              <h4>New member? Join now</h4>
-              <form onSubmit={handleJoin} className="stack">
-                <input placeholder="Full name" value={joinForm.name} onChange={(e) => setJoinForm({ ...joinForm, name: e.target.value })} required />
-                <input placeholder="Phone number" value={joinForm.phone} onChange={(e) => setJoinForm({ ...joinForm, phone: e.target.value })} required />
-                <input placeholder="Email" value={joinForm.email} onChange={(e) => setJoinForm({ ...joinForm, email: e.target.value })} />
-                <button type="submit">Join Ikafehaven</button>
-              </form>
-            </div>
-
-            <div className="card login-card">
-              <h3>Staff and admin login</h3>
-              <p>Choose your role and sign in to access the correct dashboard.</p>
-              <button type="button" className="role-button" onClick={goToStaff}>Staff login</button>
-              <button type="button" className="role-button ghost-button" onClick={goToAdmin}>Admin login</button>
-              {loginMode === 'staff' ? (
-                <form onSubmit={handleStaffLogin} className="stack login-form">
-                  <input placeholder="Staff username" value={staffLogin.username} onChange={(e) => setStaffLogin({ ...staffLogin, username: e.target.value })} required />
-                  <input type="password" placeholder="Password" value={staffLogin.password} onChange={(e) => setStaffLogin({ ...staffLogin, password: e.target.value })} required />
-                  <button type="submit">Continue to staff</button>
-                </form>
-              ) : null}
-              {loginMode === 'admin' ? (
-                <form onSubmit={handleAdminLogin} className="stack login-form">
-                  <input placeholder="Admin username" value={adminLogin.username} onChange={(e) => setAdminLogin({ ...adminLogin, username: e.target.value })} required />
-                  <input type="password" placeholder="Password" value={adminLogin.password} onChange={(e) => setAdminLogin({ ...adminLogin, password: e.target.value })} required />
-                  <button type="submit">Continue to admin</button>
-                </form>
-              ) : null}
-              {authUser ? (
-                <div className="stack auth-summary">
-                  <p>Signed in as <strong>{authUser.username}</strong></p>
-                  <p>Role: <strong>{authUser.role}</strong></p>
-                </div>
-              ) : null}
             </div>
           </section>
         )}
@@ -504,10 +671,7 @@ function App() {
           <section className="view-grid">
             <div className="card">
               <h2>Customer dashboard</h2>
-              <p>Welcome back. Your loyalty dashboard shows points, visits, and available rewards.</p>
-              {customerRewardMessage ? (
-                <div className="banner success">{customerRewardMessage}</div>
-              ) : null}
+              <p>Welcome back. Your dashboard shows your current cashback level, wallet balance, total spending, and visit count.</p>
               <form onSubmit={handleLookup} className="stack inline-form">
                 <input placeholder="Customer ID" value={customerIdInput} onChange={(e) => setCustomerIdInput(e.target.value)} required />
                 <button type="submit">Load my profile</button>
@@ -527,20 +691,25 @@ function App() {
                     </div>
                     <div className="loyalty-metrics">
                       <div>
-                        <span>Points</span>
-                        <strong>{customer.points}</strong>
+                        <span>Level</span>
+                        <strong>{LEVEL_DETAILS[customer.currentLevel]?.label || `Level ${customer.currentLevel || 1}`}</strong>
                       </div>
                       <div>
                         <span>Visits</span>
                         <strong>{customer.visits}</strong>
                       </div>
                       <div>
-                        <span>Spent</span>
-                        <strong>${customer.totalSpent}</strong>
+                        <span>Wallet</span>
+                        <strong>{formatRwf(customer.walletBalance)}</strong>
+                      </div>
+                      <div>
+                        <span>Total spend</span>
+                        <strong>{formatRwf(customer.totalSpent)}</strong>
                       </div>
                     </div>
                   </div>
                   <p className="small">Phone: {customer.phone}</p>
+                  <p className="small">Cashback rate: {LEVEL_DETAILS[customer.currentLevel]?.cashbackRate || 1}%</p>
                   {qrCode ? <img src={qrCode} alt="QR code" className="qr" /> : null}
                 </>
               ) : (
@@ -554,9 +723,11 @@ function App() {
                 <div className="stack">
                   {transactions.map((item) => (
                     <div key={item._id} className="reward-item">
-                      <strong>{item.type === 'redeem' ? 'Reward redeemed' : 'Purchase'}</strong>
+                      <strong>{item.type === 'wallet_redeem' ? 'Wallet redeemed' : 'Purchase'}</strong>
                       <p>{new Date(item.date).toLocaleString()}</p>
-                      <span>{item.pointsEarned >= 0 ? `+${item.pointsEarned}` : item.pointsEarned} pts</span>
+                      <span>
+                        Bill: {formatRwf(item.amount)} • Cashback: {formatRwf(item.cashbackEarned)} • Wallet used: {formatRwf(item.walletUsed)}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -566,18 +737,16 @@ function App() {
             </div>
 
             <div className="card">
-              <h3>Available rewards</h3>
-              {rewards.length ? (
-                rewards.map((reward) => (
-                  <div key={reward._id} className="reward-item">
-                    <strong>{reward.name}</strong>
-                    <p>{reward.description}</p>
-                    <span>{reward.pointsRequired} pts</span>
+              <h3>Level guide</h3>
+              <div className="stack">
+                {Object.entries(LEVEL_DETAILS).map(([level, details]) => (
+                  <div key={level} className="reward-item">
+                    <strong>{details.label}</strong>
+                    <p>{details.range}</p>
+                    <span>{details.cashbackRate}% cashback on each bill</span>
                   </div>
-                ))
-              ) : (
-                <p>Rewards will appear here once the admin adds them.</p>
-              )}
+                ))}
+              </div>
             </div>
           </section>
         )}
@@ -586,14 +755,14 @@ function App() {
           <section className="view-grid">
             <div className="card">
               <h2>Staff Dashboard</h2>
-              <p>Enter a customer ID, then add the purchase amount to update points.</p>
+              <p>Use the customer ID to process a bill. The wallet balance is automatically applied before the remaining bill is charged.</p>
               <div className="stats-row">
                 <div className="stat-box">
                   <strong>{customers.length}</strong>
                   <span>Customers</span>
                 </div>
                 <div className="stat-box">
-                  <strong>${stats.totalSpent}</strong>
+                  <strong>{formatRwf(stats.totalSpent)}</strong>
                   <span>Total Spend</span>
                 </div>
                 <div className="stat-box">
@@ -613,20 +782,15 @@ function App() {
             </div>
 
             <div className="card">
-              <h3>Check out purchase</h3>
-              <form onSubmit={handleAddPoints} className="stack">
-                <input placeholder="Customer ID" value={pointsForm.customerId} onChange={(e) => setPointsForm({ ...pointsForm, customerId: e.target.value })} required />
-                <input type="number" placeholder="Bill amount" value={pointsForm.amount} onChange={(e) => setPointsForm({ ...pointsForm, amount: e.target.value })} required />
-                <button type="submit">Calculate points</button>
-              </form>
-            </div>
-
-            <div className="card">
-              <h3>Redeem reward</h3>
-              <form onSubmit={handleRedeem} className="stack">
-                <input placeholder="Customer ID" value={redeemForm.customerId} onChange={(e) => setRedeemForm({ ...redeemForm, customerId: e.target.value })} required />
-                <input type="number" placeholder="Points to spend" value={redeemForm.pointsRequired} onChange={(e) => setRedeemForm({ ...redeemForm, pointsRequired: e.target.value })} required />
-                <button type="submit">Redeem</button>
+              <h3>Process purchase</h3>
+              <form onSubmit={handlePurchase} className="stack">
+                <input placeholder="Customer ID" value={purchaseForm.customerId} onChange={(e) => setPurchaseForm({ ...purchaseForm, customerId: e.target.value })} required />
+                <input type="number" placeholder="Bill amount in RWF" value={purchaseForm.amount} onChange={(e) => setPurchaseForm({ ...purchaseForm, amount: e.target.value })} required />
+                <label className="inline-checkbox">
+                  <input type="checkbox" checked={purchaseForm.useWallet} onChange={(e) => setPurchaseForm({ ...purchaseForm, useWallet: e.target.checked })} />
+                  Use wallet balance to pay this bill
+                </label>
+                <button type="submit">Process bill</button>
               </form>
             </div>
 
@@ -638,7 +802,8 @@ function App() {
                     <tr>
                       <th>Customer</th>
                       <th>ID</th>
-                      <th>Points</th>
+                      <th>Level</th>
+                      <th>Wallet</th>
                       <th>Spend</th>
                       <th>Visits</th>
                     </tr>
@@ -648,8 +813,9 @@ function App() {
                       <tr key={item._id}>
                         <td>{item.name}</td>
                         <td>{item.customerId}</td>
-                        <td>{item.points}</td>
-                        <td>${item.totalSpent}</td>
+                        <td>{LEVEL_DETAILS[item.currentLevel]?.label || `Level ${item.currentLevel || 1}`}</td>
+                        <td>{formatRwf(item.walletBalance)}</td>
+                        <td>{formatRwf(item.totalSpent)}</td>
                         <td>{item.visits}</td>
                       </tr>
                     ))}
@@ -664,13 +830,7 @@ function App() {
           <section className="view-grid">
             <div className="card">
               <h2>Admin Dashboard</h2>
-              <p>Manage rewards and monitor the strongest loyalty members.</p>
-              <form onSubmit={handleCreateReward} className="stack">
-                <input placeholder="Reward name" value={rewardForm.name} onChange={(e) => setRewardForm({ ...rewardForm, name: e.target.value })} required />
-                <input placeholder="Description" value={rewardForm.description} onChange={(e) => setRewardForm({ ...rewardForm, description: e.target.value })} required />
-                <input type="number" placeholder="Points required" value={rewardForm.pointsRequired} onChange={(e) => setRewardForm({ ...rewardForm, pointsRequired: e.target.value })} required />
-                <button type="submit">Create reward</button>
-              </form>
+              <p>Monitor the level-based cashback system and wallet balance across the entire customer base.</p>
             </div>
 
             <div className="card">
@@ -689,7 +849,22 @@ function App() {
 
             <div className="card">
               <h3>Staff & admin users</h3>
-              {users.length ? (
+              {editingUser ? (
+                <form onSubmit={handleUpdateUser} className="stack">
+                  <h4>Edit user: {editingUser.username}</h4>
+                  <select value={editUserForm.role} onChange={(e) => setEditUserForm({ ...editUserForm, role: e.target.value })}>
+                    <option value="staff">Staff</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <input placeholder="Username" value={editUserForm.username} onChange={(e) => setEditUserForm({ ...editUserForm, username: e.target.value })} required />
+                  <input type="password" placeholder="New password (leave blank to keep current)" value={editUserForm.password} onChange={(e) => setEditUserForm({ ...editUserForm, password: e.target.value })} />
+                  <input type="email" placeholder="Email" value={editUserForm.email} onChange={(e) => setEditUserForm({ ...editUserForm, email: e.target.value })} />
+                  <div className="inline-form">
+                    <button type="submit">Update user</button>
+                    <button type="button" onClick={() => { setEditingUser(null); setEditUserForm({ id: '', role: '', username: '', password: '', email: '' }); }}>Cancel</button>
+                  </div>
+                </form>
+              ) : users.length ? (
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -697,6 +872,7 @@ function App() {
                         <th>Role</th>
                         <th>Username</th>
                         <th>Email</th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -705,6 +881,12 @@ function App() {
                           <td>{user.role}</td>
                           <td>{user.username}</td>
                           <td>{user.email || '—'}</td>
+                          <td>
+                            <div className="inline-form">
+                              <button onClick={() => handleEditUser(user)}>Edit</button>
+                              <button onClick={() => handleDeleteUser(user._id)}>Delete</button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -716,23 +898,12 @@ function App() {
             </div>
 
             <div className="card">
-              <h3>Top customers</h3>
+              <h3>Top wallet holders</h3>
               {topCustomers.map((customerItem, index) => (
                 <div key={customerItem._id} className="reward-item">
                   <strong>#{index + 1} {customerItem.name}</strong>
                   <p>{customerItem.customerId}</p>
-                  <span>{customerItem.points} pts • ${customerItem.totalSpent}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="card">
-              <h3>Available rewards</h3>
-              {rewards.map((reward) => (
-                <div key={reward._id} className="reward-item">
-                  <strong>{reward.name}</strong>
-                  <p>{reward.description}</p>
-                  <span>{reward.pointsRequired} pts</span>
+                  <span>{LEVEL_DETAILS[customerItem.currentLevel]?.label || `Level ${customerItem.currentLevel || 1}`} • {formatRwf(customerItem.walletBalance)}</span>
                 </div>
               ))}
             </div>
@@ -745,7 +916,8 @@ function App() {
                     <tr>
                       <th>Name</th>
                       <th>Customer ID</th>
-                      <th>Points</th>
+                      <th>Level</th>
+                      <th>Wallet</th>
                       <th>Spend</th>
                       <th>Visits</th>
                     </tr>
@@ -755,8 +927,9 @@ function App() {
                       <tr key={item._id}>
                         <td>{item.name}</td>
                         <td>{item.customerId}</td>
-                        <td>{item.points}</td>
-                        <td>${item.totalSpent}</td>
+                        <td>{LEVEL_DETAILS[item.currentLevel]?.label || `Level ${item.currentLevel || 1}`}</td>
+                        <td>{formatRwf(item.walletBalance)}</td>
+                        <td>{formatRwf(item.totalSpent)}</td>
                         <td>{item.visits}</td>
                       </tr>
                     ))}

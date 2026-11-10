@@ -1,0 +1,25 @@
+services:
+  - type: web_service
+    name: ikafe-loyalty-backend
+    env: node
+    branch: main
+    rootDir: backend
+    buildCommand: npm install && npm test
+    startCommand: node server.js
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+
+  - type: static_site
+    name: ikafe-loyalty-frontend
+    env: static
+    branch: main
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    publishDir: dist
+    envVars:
+      - key: VITE_API_BASE
+        value: "https://<your-backend-service>.onrender.com/api"
+        sync: false

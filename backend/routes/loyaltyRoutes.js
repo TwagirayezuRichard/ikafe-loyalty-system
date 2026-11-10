@@ -3,12 +3,13 @@ const router = express.Router();
 
 const {
   getCustomerTransactions,
-  addPoints,
-  redeemReward
+  processPurchase,
+  addPoints
 } = require("../controllers/loyaltyController");
+const { authenticate, authorizeRoles } = require("../middleware/authMiddleware");
 
 router.get("/:id/transactions", getCustomerTransactions);
-router.post("/add-points", addPoints);
-router.post("/redeem", redeemReward);
+router.post("/process-purchase", authenticate, authorizeRoles("staff", "admin"), processPurchase);
+router.post("/add-points", authenticate, authorizeRoles("staff", "admin"), addPoints);
 
 module.exports = router;
